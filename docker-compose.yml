@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   coqui-tts:
-    image: ghcr.io/coqui-ai/tts-cpu  # <-- use your built image here
+    image: coqui-tts-app:latest
     deploy:
       labels:
         - traefik.enable=true
@@ -12,7 +12,7 @@ services:
         - traefik.http.routers.coqui-tts.tls.certresolver=le
         - traefik.http.services.coqui-tts.loadbalancer.server.port=5002
     ports:
-      - 5002:5002
+      - "5002:5002"
     networks:
       - traefik-public
     volumes:
