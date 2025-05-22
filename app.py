@@ -124,6 +124,22 @@ async def websocket_endpoint(websocket: WebSocket):
                         sdpMid=candidate_data["sdpMid"],
                         sdpMLineIndex=candidate_data["sdpMLineIndex"]
                     ))
+                except TypeError:
+                    # Fallback for older aiortc versions
+                    try:
+                        await pc.addIceCandidate(RTCIceCandidate(
+                            sdpMid=ice_candidate["sdpMid"],
+                            sdpMLineIndex=ice_candidate["sdpMLineIndex"],
+                            foundation="0",
+                            component=1,
+                            protocol="udp",
+                            priority=2122260223,
+                            ip=ice_candidate["candidate"].split()[4],
+                            port=int(ice_candidate["candidate"].split()[5]),
+                            type="host"
+                        ))
+                    except Exception as e:
+                        logging.error(f"Fallback candidate error: {e}")
                 except Exception as e:
                     logging.error(f"Candidate handling error: {e}")
 
