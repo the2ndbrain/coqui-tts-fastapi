@@ -119,29 +119,29 @@ async def websocket_endpoint(websocket: WebSocket):
             elif data["event"] == "candidate":
                 try:
                     candidate_data = data["data"]
-                    await pc.addIceCandidate(RTCIceCandidate(
-                        candidate=candidate_data["candidate"],
-                        sdpMid=candidate_data["sdpMid"],
-                        sdpMLineIndex=candidate_data["sdpMLineIndex"]
-                    ))
-                except TypeError:
-                    # Fallback for older aiortc versions
+                    # Modern approach first
                     try:
                         await pc.addIceCandidate(RTCIceCandidate(
-                            sdpMid=ice_candidate["sdpMid"],
-                            sdpMLineIndex=ice_candidate["sdpMLineIndex"],
-                            foundation="0",
-                            component=1,
-                            protocol="udp",
-                            priority=2122260223,
-                            ip=ice_candidate["candidate"].split()[4],
-                            port=int(ice_candidate["candidate"].split()[5]),
-                            type="host"
+                            sdpMid=candidate_data["sdpMid"],
+                            sdpMLineIndex=candidate_data["sdpMLineIndex"],
+                            candidate=candidate_data["candidate"]
                         ))
-                    except Exception as e:
-                        logging.error(f"Fallback candidate error: {e}")
+                    except TypeError:
+                        # Fallback parsing
+                        parts = candidate_data["candidate"].split()
+                        await pc.addIceCandidate(RTCIceCandidate(
+                            foundation=parts[0],
+                            component=int(parts[1]),
+                            protocol=parts[2],
+                            priority=int(parts[3]),
+                            ip=parts[4],
+                            port=int(parts[5]),
+                            type=parts[7],
+                            sdpMid=candidate_data["sdpMid"],
+                            sdpMLineIndex=candidate_data["sdpMLineIndex"]
+                        ))
                 except Exception as e:
-                    logging.error(f"Candidate handling error: {e}")
+                    logging.error(f"Candidate error: {e}")
 
     except WebSocketDisconnect:
         logging.info("Client disconnected")
