@@ -1,0 +1,3 @@
+TTS[server]
+fastapi
+uvicorn
