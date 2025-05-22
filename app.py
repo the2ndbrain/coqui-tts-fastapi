@@ -41,26 +41,20 @@ async def websocket_endpoint(websocket: WebSocket):
         async def on_message(message):
             print(f"Received message: {message}")
 
-            # message is the text sent by client for TTS
             try:
                 output_file = f"/tmp/output_{uuid.uuid4()}.wav"
                 tts.tts_to_file(text=message, file_path=output_file)
 
-                # Read audio file as bytes
                 with open(output_file, "rb") as f:
                     data = f.read()
 
-                # Break into chunks, send over data channel
-                chunk_size = 16000  # 16KB chunks
+                chunk_size = 16000
                 for i in range(0, len(data), chunk_size):
                     chunk = data[i:i+chunk_size]
                     channel.send(chunk)
-                    await asyncio.sleep(0.01)  # slight delay to avoid congestion
+                    await asyncio.sleep(0.01)
 
-                # Send an 'end' message to mark completion
                 channel.send("END")
-
-                # Cleanup file
                 os.remove(output_file)
 
             except Exception as e:
@@ -68,21 +62,26 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Receive SDP offer from client
             data = await websocket.receive_json()
+
             if "sdp" in data:
                 offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
                 await pc.setRemoteDescription(offer)
+
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
-                # Send SDP answer back
+
                 await websocket.send_json({
                     "sdp": pc.localDescription.sdp,
                     "type": pc.localDescription.type
                 })
+
+            elif "candidate" in data:
+                # ✅ Add ICE candidate from client
+                await pc.addIceCandidate(data["candidate"])
+
     except WebSocketDisconnect:
         print("WebSocket disconnected")
     finally:
         pcs.discard(pc)
         await pc.close()
-
