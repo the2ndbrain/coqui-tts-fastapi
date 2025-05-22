@@ -5,6 +5,7 @@ import asyncio
 import os
 import tempfile
 import logging
+import re
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCDataChannel
 
 app = FastAPI()
@@ -25,6 +26,14 @@ async def text_to_speech(text: str):
             return FileResponse(tmp_file.name, media_type="audio/wav", filename="speech.wav")
     except Exception as e:
         return {"error": str(e)}
+
+def clean_sdp(sdp: str) -> str:
+    """Clean and modify SDP to prevent BUNDLE group errors"""
+    # Remove problematic BUNDLE groups
+    sdp = re.sub(r'a=group:BUNDLE.*\r\n', '', sdp)
+    # Ensure proper media attributes
+    sdp = re.sub(r'm=audio \d+ \w+', r'm=audio 9 UDP/TLS/RTP/SAVPF 0', sdp)
+    return sdp
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -96,16 +105,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
             if data["event"] == "offer":
                 try:
-                    offer = RTCSessionDescription(sdp=data["data"]["sdp"], type="offer")
+                    # Clean the offer SDP before processing
+                    cleaned_sdp = clean_sdp(data["data"]["sdp"])
+                    offer = RTCSessionDescription(sdp=cleaned_sdp, type="offer")
                     await pc.setRemoteDescription(offer)
                     
                     answer = await pc.createAnswer()
-                    await pc.setLocalDescription(answer)
+                    # Clean the answer SDP before sending
+                    cleaned_answer_sdp = clean_sdp(answer.sdp)
+                    modified_answer = RTCSessionDescription(
+                        sdp=cleaned_answer_sdp,
+                        type="answer"
+                    )
+                    await pc.setLocalDescription(modified_answer)
 
                     await websocket.send_json({
                         "event": "answer",
                         "data": {
-                            "sdp": pc.localDescription.sdp,
+                            "sdp": modified_answer.sdp,
                             "type": "answer"
                         }
                     })
