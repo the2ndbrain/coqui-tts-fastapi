@@ -120,12 +120,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 candidate_dict = data["candidate"]
                 try:
-                    candidate = RTCIceCandidate(
-                        candidate=candidate_dict["candidate"],
-                        sdpMid=candidate_dict.get("sdpMid"),
-                        sdpMLineIndex=candidate_dict.get("sdpMLineIndex")
-                    )
+                    candidate = RTCIceCandidate.from_sdp(candidate_dict["candidate"])
+                    candidate.sdpMid = candidate_dict.get("sdpMid")
+                    candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
                     await pc.addIceCandidate(candidate)
+                    
                 except Exception as e:
                     logging.error(f"Failed to add ICE candidate: {e}")
 
