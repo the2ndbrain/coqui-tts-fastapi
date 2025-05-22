@@ -1,18 +1,21 @@
-version: "3.8"
+version: "3.7"
 
 services:
   coqui-tts:
-    build: .           # Keep this for local builds
-    restart: unless-stopped
+    image: ghcr.io/coqui-ai/tts-cpu
+    deploy:
+      restart_policy:
+        condition: on-failure
     networks:
-      - traefik_network
+      - traefik-public
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.coqui-tts.rule=Host(`coqui.nudge8.com`)"
-      - "traefik.http.routers.coqui-tts.entrypoints=websecure"
-      - "traefik.http.routers.coqui-tts.tls=true"
-      - "traefik.http.services.coqui-tts.loadbalancer.server.port=8000"
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.http.routers.coqui-tts.rule=Host(`coqui.nudge8.com`)
+      - traefik.http.routers.coqui-tts.entrypoints=websecure
+      - traefik.http.routers.coqui-tts.tls=true
+      - traefik.http.services.coqui-tts.loadbalancer.server.port=5002
 
 networks:
-  traefik_network:
-    external: true     # Ensure this network exists
+  traefik-public:
+    external: true
