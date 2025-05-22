@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   coqui-tts:
-    image: yourdockerhubusername/coqui-tts:latest  # <-- use your built image here
+    image: ghcr.io/coqui-ai/tts-cpu  # <-- use your built image here
     deploy:
       labels:
         - traefik.enable=true
