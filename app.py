@@ -6,20 +6,21 @@ import asyncio
 import os
 import tempfile
 import logging
-
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCDataChannel
+from aiortc.contrib.media import MediaPlayer, MediaRecorder
 
 app = FastAPI()
-
 logging.basicConfig(level=logging.INFO)
 
+# Initialize TTS model
 tts = TTS(model_name="tts_models/en/ljspeech/vits", progress_bar=False)
 
+# Store active peer connections
 pcs = set()
 
 @app.get("/")
 def read_root():
-    return {"message": "TTS service is live"}
+    return {"message": "TTS WebRTC Service"}
 
 @app.post("/tts")
 async def text_to_speech(text: str):
@@ -38,37 +39,37 @@ async def websocket_endpoint(websocket: WebSocket):
 
     def log_exception(future):
         if future.exception():
-            logging.error(f"Task exception: {future.exception()}")
+            logging.error(f"WebRTC error: {future.exception()}")
 
     @pc.on("datachannel")
     def on_datachannel(channel: RTCDataChannel):
-        logging.info(f"Data channel created: {channel.label}")
+        logging.info(f"Data channel opened: {channel.label}")
 
         @channel.on("message")
         async def on_message(message):
             if not isinstance(message, str):
                 return
-                
-            logging.info(f"Received message: {message}")
+
+            logging.info(f"Processing TTS request: {message}")
             try:
+                # Generate speech to temporary file
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                     tts.tts_to_file(text=message, file_path=tmp_file.name)
-
+                    
+                    # Stream audio chunks
                     with open(tmp_file.name, "rb") as f:
-                        data = f.read()
-
-                    chunk_size = 16000
-                    for i in range(0, len(data), chunk_size):
-                        if channel.readyState != "open":
-                            break
-                        chunk = data[i:i+chunk_size]
-                        channel.send(chunk)
-                        await asyncio.sleep(0.01)
-
+                        while True:
+                            chunk = f.read(4096)
+                            if not chunk:
+                                break
+                            if channel.readyState == "open":
+                                channel.send(chunk)
+                                await asyncio.sleep(0.01)
+                    
                     if channel.readyState == "open":
                         channel.send("END")
 
-                os.remove(tmp_file.name)
+                os.unlink(tmp_file.name)
             except Exception as e:
                 logging.error(f"TTS error: {e}")
                 if channel.readyState == "open":
@@ -76,16 +77,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
     @pc.on("iceconnectionstatechange")
     async def on_iceconnectionstatechange():
-        logging.info(f"ICE connection state changed to {pc.iceConnectionState}")
-        if pc.iceConnectionState == "failed":
+        state = pc.iceConnectionState
+        logging.info(f"ICE connection state changed to {state}")
+        if state == "failed":
             await pc.close()
             pcs.discard(pc)
 
     @pc.on("icecandidate")
     async def on_icecandidate(candidate):
         try:
-            if candidate and pc.iceConnectionState != "closed":
+            if candidate:
                 await websocket.send_json({
+                    "type": "candidate",
                     "candidate": {
                         "candidate": candidate.candidate,
                         "sdpMid": candidate.sdpMid,
@@ -99,34 +102,33 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            if "sdp" in data:
-                if pc.connectionState == "closed":
-                    raise Exception("PeerConnection is closed")
-
+            if data["type"] == "offer":
+                # Handle SDP offer
                 offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
                 await pc.setRemoteDescription(offer)
 
+                # Create and send answer
                 answer = await pc.createAnswer()
                 await pc.setLocalDescription(answer)
 
                 await websocket.send_json({
+                    "type": "answer",
                     "sdp": pc.localDescription.sdp,
                     "type": pc.localDescription.type
                 })
 
-            elif "candidate" in data:
-                if pc.iceConnectionState == "closed":
-                    continue
-
-                candidate_dict = data["candidate"]
+            elif data["type"] == "candidate":
+                # Handle ICE candidate
                 try:
-                    candidate = RTCIceCandidate.from_sdp(candidate_dict["candidate"])
-                    candidate.sdpMid = candidate_dict.get("sdpMid")
-                    candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
-                    await pc.addIceCandidate(candidate)
-                    
+                    candidate_dict = data["candidate"]
+                    await pc.addIceCandidate(RTCIceCandidate(
+                        candidate=candidate_dict["candidate"],
+                        sdpMid=candidate_dict["sdpMid"],
+                        sdpMLineIndex=candidate_dict["sdpMLineIndex"]
+                    ))
                 except Exception as e:
                     logging.error(f"Failed to add ICE candidate: {e}")
+                    continue
 
     except WebSocketDisconnect:
         logging.info("Client disconnected")
@@ -137,4 +139,14 @@ async def websocket_endpoint(websocket: WebSocket):
             pcs.discard(pc)
             await pc.close()
         except Exception as e:
-            logging.error(f"Failed to close peer connection: {e}")
+            logging.error(f"Peer connection cleanup error: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Close all peer connections on shutdown
+    for pc in pcs:
+        try:
+            await pc.close()
+        except Exception as e:
+            logging.error(f"Error closing peer connection: {e}")
+    pcs.clear()
