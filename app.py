@@ -97,7 +97,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 candidate = RTCIceCandidate(
                     sdpMid=candidate_dict.get("sdpMid"),
                     sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
-                    candidate=candidate_dict.get("candidate")
+                    sdp=candidate_dict.get("candidate")
                 )
                 await pc.addIceCandidate(candidate)
 
