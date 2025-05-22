@@ -2,11 +2,10 @@ version: "3.8"
 
 services:
   coqui-tts:
-    build: .
-    container_name: coqui-tts
+    build: .           # Keep this for local builds
     restart: unless-stopped
     networks:
-      - traefik_network  # Replace with your Traefik network name
+      - traefik_network
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.coqui-tts.rule=Host(`coqui.nudge8.com`)"
@@ -16,4 +15,4 @@ services:
 
 networks:
   traefik_network:
-    external: true  # Ensure this network exists in Docker
+    external: true     # Ensure this network exists
