@@ -1,20 +1,25 @@
-version: "3.7"
+version: "3.8"
 
 services:
   coqui-tts:
-    image: ghcr.io/coqui-ai/tts-cpu
+    image: yourdockerhubusername/coqui-tts:latest  # <-- use your built image here
     deploy:
-      restart_policy:
-        condition: on-failure
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.coqui-tts.rule=Host(`coqui.nudge8.com`)
+        - traefik.http.routers.coqui-tts.entrypoints=https
+        - traefik.http.routers.coqui-tts.tls=true
+        - traefik.http.routers.coqui-tts.tls.certresolver=le
+        - traefik.http.services.coqui-tts.loadbalancer.server.port=5002
+    ports:
+      - 5002:5002
     networks:
       - traefik-public
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=traefik-public
-      - traefik.http.routers.coqui-tts.rule=Host(`coqui.nudge8.com`)
-      - traefik.http.routers.coqui-tts.entrypoints=websecure
-      - traefik.http.routers.coqui-tts.tls=true
-      - traefik.http.services.coqui-tts.loadbalancer.server.port=5002
+    volumes:
+      - tts-data:/app/data
+
+volumes:
+  tts-data:
 
 networks:
   traefik-public:
