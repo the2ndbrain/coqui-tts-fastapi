@@ -7,6 +7,10 @@ app = FastAPI()
 
 tts = TTS(model_name="tts_models/en/ljspeech/vits", progress_bar=False)
 
+@app.get("/")
+def read_root():
+    return {"message": "TTS service is live"}
+
 @app.post("/tts")
 async def text_to_speech(text: str):
     try:
