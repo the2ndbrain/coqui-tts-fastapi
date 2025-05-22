@@ -1,3 +1,4 @@
 TTS[server]
 fastapi
-uvicorn
+uvicorn[standard]
+aiortc
