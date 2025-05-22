@@ -36,14 +36,20 @@ async def websocket_endpoint(websocket: WebSocket):
     pc = RTCPeerConnection()
     pcs.add(pc)
 
+    def log_exception(future):
+        if future.exception():
+            logging.error(f"Task exception: {future.exception()}")
+
     @pc.on("datachannel")
     def on_datachannel(channel: RTCDataChannel):
         logging.info(f"Data channel created: {channel.label}")
 
         @channel.on("message")
         async def on_message(message):
+            if not isinstance(message, str):
+                return
+                
             logging.info(f"Received message: {message}")
-
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                     tts.tts_to_file(text=message, file_path=tmp_file.name)
@@ -53,34 +59,50 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     chunk_size = 16000
                     for i in range(0, len(data), chunk_size):
+                        if channel.readyState != "open":
+                            break
                         chunk = data[i:i+chunk_size]
                         channel.send(chunk)
                         await asyncio.sleep(0.01)
 
-                    channel.send("END")
+                    if channel.readyState == "open":
+                        channel.send("END")
 
                 os.remove(tmp_file.name)
-
             except Exception as e:
-                channel.send(f"ERROR: {str(e)}")
+                logging.error(f"TTS error: {e}")
+                if channel.readyState == "open":
+                    channel.send(f"ERROR: {str(e)}")
+
+    @pc.on("iceconnectionstatechange")
+    async def on_iceconnectionstatechange():
+        logging.info(f"ICE connection state changed to {pc.iceConnectionState}")
+        if pc.iceConnectionState == "failed":
+            await pc.close()
+            pcs.discard(pc)
 
     @pc.on("icecandidate")
     async def on_icecandidate(candidate):
-        if candidate:
-            logging.info(f"Sending ICE candidate to client: {candidate}")
-            await websocket.send_json({
-                "candidate": {
-                    "candidate": candidate.to_sdp(),
-                    "sdpMid": candidate.sdpMid,
-                    "sdpMLineIndex": candidate.sdpMLineIndex
-                }
-            })
+        try:
+            if candidate and pc.iceConnectionState != "closed":
+                await websocket.send_json({
+                    "candidate": {
+                        "candidate": candidate.candidate,
+                        "sdpMid": candidate.sdpMid,
+                        "sdpMLineIndex": candidate.sdpMLineIndex
+                    }
+                })
+        except Exception as e:
+            logging.error(f"Failed to send ICE candidate: {e}")
 
     try:
         while True:
             data = await websocket.receive_json()
 
             if "sdp" in data:
+                if pc.connectionState == "closed":
+                    raise Exception("PeerConnection is closed")
+
                 offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
                 await pc.setRemoteDescription(offer)
 
@@ -93,16 +115,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
             elif "candidate" in data:
+                if pc.iceConnectionState == "closed":
+                    continue
+
                 candidate_dict = data["candidate"]
-                candidate = RTCIceCandidate(
-                    sdpMid=candidate_dict.get("sdpMid"),
-                    sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
-                    candidate=candidate_dict.get("candidate")  # Changed from 'sdp' to 'candidate'
-                )
-                await pc.addIceCandidate(candidate)
+                try:
+                    candidate = RTCIceCandidate(
+                        candidate=candidate_dict["candidate"],
+                        sdpMid=candidate_dict.get("sdpMid"),
+                        sdpMLineIndex=candidate_dict.get("sdpMLineIndex")
+                    )
+                    await pc.addIceCandidate(candidate)
+                except Exception as e:
+                    logging.error(f"Failed to add ICE candidate: {e}")
 
     except WebSocketDisconnect:
-        logging.info("WebSocket disconnected")
+        logging.info("Client disconnected")
+    except Exception as e:
+        logging.error(f"WebSocket error: {e}")
     finally:
-        pcs.discard(pc)
-        await pc.close()
+        try:
+            pcs.discard(pc)
+            await pc.close()
+        except Exception as e:
+            logging.error(f"Failed to close peer connection: {e}")
