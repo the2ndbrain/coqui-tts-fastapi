@@ -4,14 +4,17 @@ from TTS.api import TTS
 import uuid
 import asyncio
 import os
+import tempfile
+import logging
 
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCDataChannel
 
 app = FastAPI()
 
+logging.basicConfig(level=logging.INFO)
+
 tts = TTS(model_name="tts_models/en/ljspeech/vits", progress_bar=False)
 
-# Keep track of peer connections to close on disconnect
 pcs = set()
 
 @app.get("/")
@@ -21,9 +24,9 @@ def read_root():
 @app.post("/tts")
 async def text_to_speech(text: str):
     try:
-        output_file = f"/tmp/output_{uuid.uuid4()}.wav"
-        tts.tts_to_file(text=text, file_path=output_file)
-        return FileResponse(output_file, media_type="audio/wav", filename="speech.wav")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tts.tts_to_file(text=text, file_path=tmp_file.name)
+            return FileResponse(tmp_file.name, media_type="audio/wav", filename="speech.wav")
     except Exception as e:
         return {"error": str(e)}
 
@@ -35,30 +38,43 @@ async def websocket_endpoint(websocket: WebSocket):
 
     @pc.on("datachannel")
     def on_datachannel(channel: RTCDataChannel):
-        print(f"Data channel created: {channel.label}")
+        logging.info(f"Data channel created: {channel.label}")
 
         @channel.on("message")
         async def on_message(message):
-            print(f"Received message: {message}")
+            logging.info(f"Received message: {message}")
 
             try:
-                output_file = f"/tmp/output_{uuid.uuid4()}.wav"
-                tts.tts_to_file(text=message, file_path=output_file)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                    tts.tts_to_file(text=message, file_path=tmp_file.name)
 
-                with open(output_file, "rb") as f:
-                    data = f.read()
+                    with open(tmp_file.name, "rb") as f:
+                        data = f.read()
 
-                chunk_size = 16000
-                for i in range(0, len(data), chunk_size):
-                    chunk = data[i:i+chunk_size]
-                    channel.send(chunk)
-                    await asyncio.sleep(0.01)
+                    chunk_size = 16000
+                    for i in range(0, len(data), chunk_size):
+                        chunk = data[i:i+chunk_size]
+                        channel.send(chunk)
+                        await asyncio.sleep(0.01)
 
-                channel.send("END")
-                os.remove(output_file)
+                    channel.send("END")
+
+                os.remove(tmp_file.name)
 
             except Exception as e:
                 channel.send(f"ERROR: {str(e)}")
+
+    @pc.on("icecandidate")
+    async def on_icecandidate(candidate):
+        if candidate:
+            logging.info(f"Sending ICE candidate to client: {candidate}")
+            await websocket.send_json({
+                "candidate": {
+                    "candidate": candidate.to_sdp(),
+                    "sdpMid": candidate.sdpMid,
+                    "sdpMLineIndex": candidate.sdpMLineIndex
+                }
+            })
 
     try:
         while True:
@@ -77,11 +93,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
             elif "candidate" in data:
-                # ✅ Add ICE candidate from client
-                await pc.addIceCandidate(data["candidate"])
+                candidate_dict = data["candidate"]
+                candidate = RTCIceCandidate(
+                    sdpMid=candidate_dict.get("sdpMid"),
+                    sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
+                    candidate=candidate_dict.get("candidate")
+                )
+                await pc.addIceCandidate(candidate)
 
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        logging.info("WebSocket disconnected")
     finally:
         pcs.discard(pc)
         await pc.close()
