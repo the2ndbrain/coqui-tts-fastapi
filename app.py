@@ -1,21 +1,16 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from TTS.api import TTS
-import uuid
 import asyncio
 import os
 import tempfile
 import logging
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, RTCDataChannel
-from aiortc.contrib.media import MediaPlayer, MediaRecorder
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# Initialize TTS model
 tts = TTS(model_name="tts_models/en/ljspeech/vits", progress_bar=False)
-
-# Store active peer connections
 pcs = set()
 
 @app.get("/")
@@ -37,10 +32,6 @@ async def websocket_endpoint(websocket: WebSocket):
     pc = RTCPeerConnection()
     pcs.add(pc)
 
-    def log_exception(future):
-        if future.exception():
-            logging.error(f"WebRTC error: {future.exception()}")
-
     @pc.on("datachannel")
     def on_datachannel(channel: RTCDataChannel):
         logging.info(f"Data channel opened: {channel.label}")
@@ -52,11 +43,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
             logging.info(f"Processing TTS request: {message}")
             try:
-                # Generate speech to temporary file
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                     tts.tts_to_file(text=message, file_path=tmp_file.name)
                     
-                    # Stream audio chunks
                     with open(tmp_file.name, "rb") as f:
                         while True:
                             chunk = f.read(4096)
@@ -78,8 +67,8 @@ async def websocket_endpoint(websocket: WebSocket):
     @pc.on("iceconnectionstatechange")
     async def on_iceconnectionstatechange():
         state = pc.iceConnectionState
-        logging.info(f"ICE connection state changed to {state}")
-        if state == "failed":
+        logging.info(f"ICE connection state: {state}")
+        if state in ["failed", "disconnected"]:
             await pc.close()
             pcs.discard(pc)
 
@@ -88,8 +77,8 @@ async def websocket_endpoint(websocket: WebSocket):
         try:
             if candidate:
                 await websocket.send_json({
-                    "type": "candidate",
-                    "candidate": {
+                    "event": "candidate",
+                    "data": {
                         "candidate": candidate.candidate,
                         "sdpMid": candidate.sdpMid,
                         "sdpMLineIndex": candidate.sdpMLineIndex
@@ -102,33 +91,41 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            if data["type"] == "offer":
-                # Handle SDP offer
-                offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
-                await pc.setRemoteDescription(offer)
+            if "event" not in data:
+                continue
 
-                # Create and send answer
-                answer = await pc.createAnswer()
-                await pc.setLocalDescription(answer)
-
-                await websocket.send_json({
-                    "type": "answer",
-                    "sdp": pc.localDescription.sdp,
-                    "type": pc.localDescription.type
-                })
-
-            elif data["type"] == "candidate":
-                # Handle ICE candidate
+            if data["event"] == "offer":
                 try:
-                    candidate_dict = data["candidate"]
+                    offer = RTCSessionDescription(sdp=data["data"]["sdp"], type="offer")
+                    await pc.setRemoteDescription(offer)
+                    
+                    answer = await pc.createAnswer()
+                    await pc.setLocalDescription(answer)
+
+                    await websocket.send_json({
+                        "event": "answer",
+                        "data": {
+                            "sdp": pc.localDescription.sdp,
+                            "type": "answer"
+                        }
+                    })
+                except Exception as e:
+                    logging.error(f"Offer handling error: {e}")
+                    await websocket.send_json({
+                        "event": "error",
+                        "data": str(e)
+                    })
+
+            elif data["event"] == "candidate":
+                try:
+                    candidate_data = data["data"]
                     await pc.addIceCandidate(RTCIceCandidate(
-                        candidate=candidate_dict["candidate"],
-                        sdpMid=candidate_dict["sdpMid"],
-                        sdpMLineIndex=candidate_dict["sdpMLineIndex"]
+                        candidate=candidate_data["candidate"],
+                        sdpMid=candidate_data["sdpMid"],
+                        sdpMLineIndex=candidate_data["sdpMLineIndex"]
                     ))
                 except Exception as e:
-                    logging.error(f"Failed to add ICE candidate: {e}")
-                    continue
+                    logging.error(f"Candidate handling error: {e}")
 
     except WebSocketDisconnect:
         logging.info("Client disconnected")
@@ -139,14 +136,13 @@ async def websocket_endpoint(websocket: WebSocket):
             pcs.discard(pc)
             await pc.close()
         except Exception as e:
-            logging.error(f"Peer connection cleanup error: {e}")
+            logging.error(f"Cleanup error: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Close all peer connections on shutdown
     for pc in pcs:
         try:
             await pc.close()
         except Exception as e:
-            logging.error(f"Error closing peer connection: {e}")
+            logging.error(f"Shutdown error: {e}")
     pcs.clear()
